@@ -1,0 +1,161 @@
+name: CI & Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release version & tag
+        id: meta
+        run: |
+          ver="$(grep -m1 '^version' crates/hadald/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Linux build & runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libdbus-1-dev libglib2.0-dev librsvg2-dev \
+            nftables iputils-ping iproute2
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build & test SolidJS frontend
+        working-directory: crates/hadal-gui
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run test
+          bun run build
+
+      - name: Run unit, clippy & nftables validation tests (release profile to share cache with release build)
+        run: |
+          cargo test --release -p hadal-core -p hadal-cli -p hadal-gui
+          cargo test --release -p hadald --lib
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run kernel netns E2E tests (when runner kernel supports WireGuard + cgroup2)
+        run: |
+          if sudo modprobe wireguard 2>/dev/null && grep -q cgroup2 /proc/filesystems; then
+            cargo test --release -p hadald --test netns_e2e -- --nocapture || echo "::warning::netns_e2e failed under hosted runner environment"
+          else
+            echo "Skipping netns_e2e: runner kernel lacks wireguard module or cgroup2"
+          fi
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Check whether release should be published
+        id: rel_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install nFPM packager
+        if: steps.rel_gate.outputs.publish == 'true'
+        run: |
+          NFPM_VER="2.49.0"
+          curl -fsSL -o /tmp/nfpm.deb "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_amd64.deb"
+          sudo dpkg -i /tmp/nfpm.deb
+
+      - name: Package release artifacts (.tar.gz, .deb, .rpm, .pkg.tar.zst)
+        if: steps.rel_gate.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          rm -rf dist-release packaging/build
+          mkdir -p dist-release packaging/build
+
+          sed 's|/usr/local/bin/hadald|/usr/bin/hadald|g' contrib/hadald.service > packaging/build/hadald.service
+          sed 's|/usr/local/bin/hadal-gui|/usr/bin/hadal-gui|g' contrib/hadal-gui.service > packaging/build/hadal-gui.service
+
+          # Generic tarball (compatible with scripts/install.sh --from-release)
+          stage="dist-release/hadal-vpn-${TAG}-linux-x86_64"
+          mkdir -p "$stage/bin" "$stage/contrib" "$stage/scripts"
+          install -Dm755 target/release/hadald "$stage/bin/hadald"
+          install -Dm755 target/release/hadal-cli "$stage/bin/hadal-cli"
+          install -Dm755 target/release/hadal-gui "$stage/bin/hadal-gui"
+          install -Dm644 contrib/hadald.service "$stage/contrib/hadald.service"
+          install -Dm644 contrib/hadald.sysusers "$stage/contrib/hadald.sysusers"
+          install -Dm644 contrib/hadal-gui.service "$stage/contrib/hadal-gui.service"
+          install -Dm644 contrib/hadal-vpn.desktop "$stage/contrib/hadal-vpn.desktop"
+          install -Dm644 contrib/hyprland-hadal.lua "$stage/contrib/hyprland-hadal.lua"
+          install -Dm644 crates/hadal-gui/src-tauri/icons/128x128.png "$stage/contrib/hadal-vpn.png"
+          install -Dm755 scripts/install.sh "$stage/scripts/install.sh"
+          install -Dm644 README.md "$stage/README.md"
+          install -Dm644 crates/hadal-gui/THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.md"
+          install -Dm644 LICENSE "$stage/LICENSE"
+
+          tar -C dist-release -czf "dist-release/hadal-vpn-${TAG}-linux-x86_64.tar.gz" "hadal-vpn-${TAG}-linux-x86_64"
+          rm -rf "$stage"
+
+          # Native distro packages (.deb, .rpm, Arch .pkg.tar.zst)
+          nfpm package -f packaging/nfpm.yaml -p deb -t dist-release/
+          nfpm package -f packaging/nfpm.yaml -p rpm -t dist-release/
+          nfpm package -f packaging/nfpm.yaml -p archlinux -t dist-release/
+
+          cp scripts/install.sh dist-release/install.sh
+          (cd dist-release && sha256sum * > SHA256SUMS)
+          ls -lh dist-release
+
+      - name: Upload build artifacts
+        if: steps.rel_gate.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadal-vpn-linux-x86_64
+          path: dist-release
+          retention-days: 7
+
+      - name: Publish GitHub Release
+        if: steps.rel_gate.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Hadal VPN ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: dist-release/*

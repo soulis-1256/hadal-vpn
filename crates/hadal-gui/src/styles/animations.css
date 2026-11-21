@@ -1,0 +1,138 @@
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes shine {
+  55%,
+  100% {
+    transform: translateX(130%);
+  }
+}
+
+@keyframes loadSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes bodyIn {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes bodyBack {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes listFade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes segExitFwd {
+  to {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+}
+
+@keyframes segExitBwd {
+  to {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+
+@keyframes segEnterFwd {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes segEnterBwd {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.device[data-state="connecting"] .st-dot {
+  animation: blink 0.55s infinite;
+}
+
+.full-body.anim-in {
+  animation: bodyIn 0.24s var(--ease);
+}
+
+.full-body.anim-back {
+  animation: bodyBack 0.24s var(--ease);
+}
+
+.list-fade {
+  animation: listFade 0.2s var(--ease);
+}
+
+.segmented-pane[data-phase="exiting"][data-dir="forward"] {
+  animation: segExitFwd 100ms var(--ease) forwards;
+}
+
+.segmented-pane[data-phase="exiting"][data-dir="backward"] {
+  animation: segExitBwd 100ms var(--ease) forwards;
+}
+
+.segmented-pane[data-phase="entering"][data-dir="forward"] {
+  animation: segEnterFwd 140ms var(--ease);
+}
+
+.segmented-pane[data-phase="entering"][data-dir="backward"] {
+  animation: segEnterBwd 140ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

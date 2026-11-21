@@ -1,0 +1,7 @@
+/target
+/dist-release
+/packaging/build
+node_modules
+dist
+.env
+*.log

@@ -1,0 +1,90 @@
+name: "hadal-vpn"
+arch: "amd64"
+platform: "linux"
+version: "${VERSION}"
+section: "net"
+priority: "optional"
+maintainer: "soulis-1256 <tasosandreou01@gmail.com>"
+description: "Unofficial Linux WireGuard VPN daemon, CLI, and tray popover for Surfshark accounts"
+homepage: "https://github.com/soulis-1256/hadal-vpn"
+license: "GPL-3.0-or-later"
+
+scripts:
+  postinstall: "packaging/postinstall.sh"
+  preremove: "packaging/preremove.sh"
+
+overrides:
+  deb:
+    depends:
+      - nftables
+      - iputils-ping
+      - libwebkit2gtk-4.1-0
+      - libgtk-3-0
+      - libsoup-3.0-0
+      - systemd
+  rpm:
+    depends:
+      - nftables
+      - iputils
+      - webkit2gtk4.1
+      - gtk3
+      - libsoup3
+      - systemd
+  archlinux:
+    depends:
+      - nftables
+      - iputils
+      - webkit2gtk-4.1
+      - gtk3
+      - libsoup3
+      - systemd
+
+contents:
+  - src: target/release/hadald
+    dst: /usr/bin/hadald
+    file_info:
+      mode: 0755
+  - src: target/release/hadal-cli
+    dst: /usr/bin/hadal-cli
+    file_info:
+      mode: 0755
+  - src: target/release/hadal-gui
+    dst: /usr/bin/hadal-gui
+    file_info:
+      mode: 0755
+  - src: packaging/build/hadald.service
+    dst: /usr/lib/systemd/system/hadald.service
+    file_info:
+      mode: 0644
+  - src: packaging/build/hadal-gui.service
+    dst: /usr/lib/systemd/user/hadal-gui.service
+    file_info:
+      mode: 0644
+  - src: contrib/hadald.sysusers
+    dst: /usr/lib/sysusers.d/hadald.conf
+    file_info:
+      mode: 0644
+  - src: contrib/hadal-vpn.desktop
+    dst: /usr/share/applications/hadal-vpn.desktop
+    file_info:
+      mode: 0644
+  - src: crates/hadal-gui/src-tauri/icons/128x128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/hadal-vpn.png
+    file_info:
+      mode: 0644
+  - src: contrib/hyprland-hadal.lua
+    dst: /usr/share/doc/hadal-vpn/hyprland-hadal.lua
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/hadal-vpn/README.md
+    file_info:
+      mode: 0644
+  - src: crates/hadal-gui/THIRD_PARTY_NOTICES.md
+    dst: /usr/share/doc/hadal-vpn/THIRD_PARTY_NOTICES.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/licenses/hadal-vpn/LICENSE
+    file_info:
+      mode: 0644

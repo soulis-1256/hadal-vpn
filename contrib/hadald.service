@@ -1,0 +1,17 @@
+[Unit]
+Description=Hadal VPN Privileged Network Daemon (Kernel WireGuard + nftables + Split Tunneling)
+After=network-online.target systemd-resolved.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hadald --socket /run/hadald/hadald.sock --state-dir /run/hadald --iface hadal-wg --dns-mode auto --group network
+RuntimeDirectory=hadald
+RuntimeDirectoryMode=0755
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

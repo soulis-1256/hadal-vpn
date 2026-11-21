@@ -1,0 +1,2 @@
+# Create the group allowed to access /run/hadald/hadald.sock without root
+g network -

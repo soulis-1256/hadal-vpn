@@ -1,0 +1,360 @@
+.device {
+  width: 100%;
+  height: 100%;
+  min-width: 360px;
+  min-height: 540px;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  font-family: var(--f-ui);
+  color: var(--ink);
+  background: radial-gradient(125% 85% at 50% 26%, #0e1732 0%, #03050c 75%);
+  user-select: none;
+}
+
+.globe-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.globe-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.globe-stage canvas.sky {
+  z-index: 0;
+  pointer-events: none;
+}
+
+.globe-stage canvas.globe-gl {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.globe-stage canvas.hud {
+  z-index: 2;
+  cursor: grab;
+  touch-action: none;
+}
+
+/* Spatial Atlas Layers */
+.home-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  transition: opacity 0.22s var(--ease);
+}
+
+.home-layer > * {
+  pointer-events: auto;
+}
+
+.device[data-mode="sheet"] .home-layer {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.device[data-mode="full"] .home-layer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.device[data-mode="sheet"] .home-layer *,
+.device[data-mode="full"] .home-layer * {
+  backdrop-filter: none !important;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: rgba(3, 5, 12, 0.72);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.24s var(--ease);
+  cursor: pointer;
+}
+
+.backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sheet-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 476px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: #0a1022;
+  border-radius: 22px 22px 0 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 -24px 56px rgba(0, 0, 0, 0.85);
+  transform: translate3d(0, 104%, 0);
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    transform 0.22s cubic-bezier(0.32, 0, 0.67, 0),
+    visibility 0s linear 0.22s;
+}
+
+.sheet-layer.open {
+  transform: translate3d(0, 0, 0);
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0s;
+}
+
+.full-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: #070b18;
+  transform: translate3d(100%, 0, 0);
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    transform 0.22s cubic-bezier(0.32, 0, 0.67, 0),
+    visibility 0s linear 0.22s;
+}
+
+.full-layer.open {
+  transform: translate3d(0, 0, 0);
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0s;
+}
+
+/* Home Top Bar & Bottom Dock */
+.top-bar {
+  position: relative;
+  flex: none;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 14px;
+}
+
+.top-bar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 98px;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(3, 5, 13, 0.86) 0%,
+      rgba(3, 5, 13, 0.64) 44%,
+      rgba(3, 5, 13, 0.2) 76%,
+      rgba(3, 5, 13, 0) 100%
+    ),
+    radial-gradient(
+      ellipse 175px 68px at 72px 26px,
+      rgba(3, 5, 13, 0.55) 0%,
+      rgba(3, 5, 13, 0.25) 55%,
+      rgba(3, 5, 13, 0) 100%
+    );
+}
+
+.top-bar > * {
+  position: relative;
+  z-index: 1;
+}
+
+.brand-grp {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.wm {
+  font-family: var(--f-disp);
+  font-weight: var(--wm-w);
+  font-size: var(--wm-sz);
+  letter-spacing: var(--wm-ls);
+  line-height: 1;
+  text-shadow: 0 2px 10px rgba(3, 5, 12, 0.95), 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.wm span {
+  color: var(--sc);
+}
+
+.top-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 500 12.5px var(--f-mono);
+  color: rgba(186, 200, 232, 0.92);
+  text-shadow: 0 1px 8px rgba(3, 5, 12, 0.95), 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.top-status b {
+  color: var(--sc);
+  font-weight: 600;
+}
+
+.st-dot {
+  width: 7.5px;
+  height: 7.5px;
+  border-radius: 50%;
+  background: var(--sc);
+  box-shadow: 0 0 10px var(--sc);
+  flex: none;
+}
+
+.space-hud {
+  flex: 1;
+  position: relative;
+  pointer-events: none !important;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 6px 14px 0;
+}
+
+.space-hud > * {
+  pointer-events: auto;
+}
+
+.atlas-dock {
+  position: relative;
+  margin: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.atlas-dock::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  right: -14px;
+  bottom: -14px;
+  height: 185px;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    rgba(3, 5, 13, 0.9) 0%,
+    rgba(3, 5, 13, 0.66) 44%,
+    rgba(3, 5, 13, 0.2) 76%,
+    rgba(3, 5, 13, 0) 100%
+  );
+}
+
+.atlas-dock > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Sheet & Fullscreen Interior Chrome */
+.sheet-handle {
+  padding: 10px 0 4px;
+  display: flex;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+}
+
+.sheet-handle i {
+  width: 38px;
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.22);
+  transition: background 0.2s, width 0.2s;
+}
+
+.sheet-handle:hover i {
+  background: rgba(255, 255, 255, 0.42);
+  width: 48px;
+}
+
+.sheet-hdr,
+.full-hdr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px 12px;
+  flex: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.full-hdr {
+  height: 58px;
+  padding: 0 14px;
+}
+
+.stitle {
+  flex: 1;
+  min-width: 0;
+}
+
+.stitle small {
+  display: block;
+  font: 600 9px var(--f-mono);
+  color: var(--sc);
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.stitle b {
+  display: block;
+  font-family: var(--f-disp);
+  font-size: var(--hdr-sz);
+  font-weight: var(--hdr-w);
+  letter-spacing: var(--hdr-ls);
+  line-height: 1.15;
+}
+
+.sheet-pinned {
+  flex: none;
+  padding: 10px 14px 4px;
+}
+
+.sheet-pinned .search-row {
+  margin-bottom: 4px;
+}
+
+.sheet-body,
+.full-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px 16px;
+}
+
+.sheet-body {
+  padding: 6px 10px 16px 14px;
+}

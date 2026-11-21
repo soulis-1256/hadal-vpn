@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Hadal VPN
+Comment=Linux Kernel WireGuard & Gaming Optimizer VPN Client
+Exec=hadal-gui
+Icon=hadal-vpn
+Terminal=false
+Categories=Network;Security;
+StartupWMClass=hadal-gui
+Keywords=vpn;wireguard;surfshark;gaming;
