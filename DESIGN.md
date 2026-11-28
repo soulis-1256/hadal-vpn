@@ -75,5 +75,5 @@ All icons use `lucide-solid/icons/*` (`ISC` license):
 ## 5. Tray Icon, Legal Notices & Hyprland Rules (`crates/hadal-gui`)
 
 * **Tray Badge (`render_tray_badge` in `src-tauri/src/tray.rs`, `64 × 64` RGBA):** Orbital Hadal crescent + depth-core squircle (`BADGE_BODY_RGB = (12, 16, 22)`, `BADGE_RIM_RGB = (42, 56, 74)`, `BADGE_MARK_RGB = (241, 245, 249)`) with state beacon dot: `Protected (16, 209, 144)`, `Connecting (34, 211, 238)`, `KillswitchLocked (244, 63, 94)`, `Disconnected (100, 116, 139)`.
-* **GPLv3 & Third-Party Attribution:** `SettingsView` exposes a compact `About & Licenses` row (`v0.2.0 · GPL-3.0-or-later`) opening `AboutView` with copyright, no-warranty terms, and Mullvad/Natural Earth/Fontsource/Lucide notices (see `crates/hadal-gui/THIRD_PARTY_NOTICES.md`).
+* **GPLv3 & Third-Party Attribution:** `SettingsView` exposes a compact `About & Licenses` row (`v0.2.1 · GPL-3.0-or-later`) opening `AboutView` with copyright, no-warranty terms, and Mullvad/Natural Earth/Fontsource/Lucide notices (see `crates/hadal-gui/THIRD_PARTY_NOTICES.md`).
 * **Hyprland Floating Rules (`hyprland.rs`):** `360 × 540`, `float = true`, `pin = true`, `border_size = 0`, `rounding = 8`, `opaque = true`, `no_blur = true`, `hyprbars:no_bar = true`, snapped above the active tray icon/panel edge.

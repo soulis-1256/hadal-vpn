@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "hadal-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "hadal-core",
@@ -1610,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "hadal-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "hadal-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs 6.0.0",
  "hadal-core",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "hadald"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "clap",

@@ -221,7 +221,7 @@ describe("Hadal VPN Spatial Atlas App & Views integration", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByText("tester@example.com");
     await fireEvent.click(screen.getByRole("button", { name: /About & Licenses/i }));
-    await screen.findByText("Hadal VPN v0.2.0");
+    await screen.findByText("Hadal VPN v0.2.1");
     expect(screen.getByText("GPL-3.0-or-later")).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "View GNU GPL-3.0 License" }));
     expect(fake.mocks.openExternal).toHaveBeenCalledWith(
