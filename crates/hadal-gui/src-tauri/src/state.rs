@@ -5,10 +5,9 @@ use tokio::sync::Mutex;
 
 use hadal_core::auth::{AuthResponse, RemoteCodeResponse, UserMe};
 use hadal_core::{
-    active_slice_for_mode, find_game_region, AppSettings, Cluster, ConnectSpec, DaemonRequest,
-    DaemonResponse, DaemonStatus, DesktopAppEntry, GamingScanReport, SplitAppStatus, SplitMode,
-    TunnelState, UserLocation, WgKeyPair, BYPASS_SLICE, DEFAULT_WG_PORT, VPN_SLICE,
-    default_tunnel_dns,
+    active_slice_for_mode, default_tunnel_dns, find_game_region, AppSettings, Cluster, ConnectSpec,
+    DaemonRequest, DaemonResponse, DaemonStatus, DesktopAppEntry, GamingScanReport, SplitAppStatus,
+    SplitMode, TunnelState, UserLocation, BYPASS_SLICE, DEFAULT_WG_PORT, VPN_SLICE,
 };
 
 use crate::backend::{
@@ -187,12 +186,7 @@ impl AppController {
             )
             .await?;
 
-        let keys = WgKeyPair::generate();
-        let reg = self
-            .services
-            .account
-            .register_public_key(&keys.public_key)
-            .await?;
+        let wg_key = self.services.account.ensure_wireguard_key().await?;
 
         let split_cgroups = self.build_split_cgroups(
             settings.split_tunnel.mode,
@@ -205,8 +199,8 @@ impl AppController {
             endpoint_ip: ep_ip,
             endpoint_port: ep_port,
             pub_key,
-            priv_key: keys.private_key,
-            address: reg.wireguard_address(),
+            priv_key: wg_key.private_key,
+            address: wg_key.address,
             dns: default_tunnel_dns(),
             mtu: effective_mtu,
             killswitch: settings.killswitch,

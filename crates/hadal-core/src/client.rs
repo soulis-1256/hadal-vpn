@@ -16,7 +16,10 @@ use crate::error::{Result, HadalError};
 use crate::ipc::DaemonClient;
 use crate::platform::{BoxFuture, Clock, Sleeper, SystemClock, TokioSleeper};
 use crate::servers::{Cluster, UserLocation};
-use crate::wireguard::RegisterPublicKeyResponse;
+use crate::wireguard::{
+    FileWgKeyStore, KeyPairGenerator, OsKeyPairGenerator, PersistedWgKey,
+    RegisterPublicKeyResponse, WgKeyPair, WgKeyStore,
+};
 
 pub use crate::transport::{HttpRequest, HttpResponse, HttpTransport, ReqwestHttpTransport};
 
@@ -30,6 +33,19 @@ pub trait KeyRegistrar: Send + Sync {
         &'a self,
         pub_key: &'a str,
     ) -> BoxFuture<'a, Result<RegisterPublicKeyResponse>>;
+
+    /// Obtain a ready-to-use WireGuard client keypair and tunnel address.
+    /// Production [`HadalClient`] persists and reuses a single keypair until near expiry.
+    fn ensure_wireguard_key<'a>(
+        &'a self,
+        keys: &'a dyn KeyPairGenerator,
+    ) -> BoxFuture<'a, Result<PersistedWgKey>> {
+        Box::pin(async move {
+            let pair = keys.generate();
+            let reg = self.register_public_key(&pair.public_key).await?;
+            Ok(PersistedWgKey::from_registration(pair, &reg, None))
+        })
+    }
 }
 
 /// High-level Surfshark account & server API trait for CLI/GUI dependency injection.
@@ -39,12 +55,28 @@ pub trait HadalApi: KeyRegistrar {
     fn get_user_me(&self) -> BoxFuture<'_, Result<UserMe>>;
     fn get_clusters(&self) -> BoxFuture<'_, Result<Vec<Cluster>>>;
     fn get_user_location(&self) -> BoxFuture<'_, Result<UserLocation>>;
+
+    /// Explicitly rotate Hadal's WireGuard keypair and register the replacement.
+    fn rotate_wireguard_key<'a>(
+        &'a self,
+        keys: &'a dyn KeyPairGenerator,
+    ) -> BoxFuture<'a, Result<PersistedWgKey>> {
+        Box::pin(async move {
+            let pair = keys.generate();
+            let reg = self.register_public_key(&pair.public_key).await?;
+            Ok(PersistedWgKey::from_registration(pair, &reg, None))
+        })
+    }
 }
 
 #[derive(Clone)]
 pub struct HadalClient {
     transport: Arc<dyn HttpTransport>,
     session_store: Option<Arc<dyn SessionStore>>,
+    wg_key_store: Option<Arc<dyn WgKeyStore>>,
+    wg_key_cache: Arc<RwLock<Option<PersistedWgKey>>>,
+    wg_key_lock: Arc<Mutex<()>>,
+    key_generator: Arc<dyn KeyPairGenerator>,
     clock: Arc<dyn Clock>,
     sleeper: Arc<dyn Sleeper>,
     base_url: String,
@@ -75,6 +107,7 @@ impl HadalClient {
             device_id,
         );
         client.session_store = Some(store);
+        client.wg_key_store = Some(Arc::new(FileWgKeyStore::new(&dir)));
         if let Some(session) = loaded {
             client.install_session_sync(session);
         }
@@ -102,12 +135,23 @@ impl HadalClient {
 
     pub fn with_config_dir(mut self, dir: PathBuf) -> Self {
         self.device_id = load_or_generate_device_id(&dir);
-        self.session_store = Some(Arc::new(FileSessionStore::new(dir)));
+        self.session_store = Some(Arc::new(FileSessionStore::new(&dir)));
+        self.wg_key_store = Some(Arc::new(FileWgKeyStore::new(dir)));
         self
     }
 
     pub fn with_session_store(mut self, store: Arc<dyn SessionStore>) -> Self {
         self.session_store = Some(store);
+        self
+    }
+
+    pub fn with_wg_key_store(mut self, store: Arc<dyn WgKeyStore>) -> Self {
+        self.wg_key_store = Some(store);
+        self
+    }
+
+    pub fn with_key_generator(mut self, key_generator: Arc<dyn KeyPairGenerator>) -> Self {
+        self.key_generator = key_generator;
         self
     }
 
@@ -140,6 +184,10 @@ impl HadalClient {
         Self {
             transport,
             session_store: None,
+            wg_key_store: None,
+            wg_key_cache: Arc::new(RwLock::new(None)),
+            wg_key_lock: Arc::new(Mutex::new(())),
+            key_generator: Arc::new(OsKeyPairGenerator),
             clock: Arc::new(SystemClock),
             sleeper: Arc::new(TokioSleeper),
             base_url: BASE_URL.to_string(),
@@ -216,6 +264,67 @@ impl HadalClient {
         *self.token_expires_at.write().await = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(ref store) = self.session_store {
+            store.clear();
+        }
+        self.clear_cached_wg_key().await;
+    }
+
+    /// Log out of Surfshark: best-effort revoke Hadal's own persisted WireGuard key id
+    /// (without touching any other keys on the account), then clear local session & key files.
+    pub async fn logout(&self) {
+        {
+            let _guard = self.wg_key_lock.lock().await;
+            let has_token = self
+                .token
+                .read()
+                .await
+                .as_deref()
+                .is_some_and(|t| !t.trim().is_empty());
+            if has_token {
+                if let Some(key_id) = self
+                    .load_cached_wg_key()
+                    .await
+                    .and_then(|k| k.key_id)
+                {
+                    let _ = self.delete_public_key_inner(&key_id, false).await;
+                }
+            }
+            self.clear_cached_wg_key().await;
+        }
+        self.clear_session().await;
+    }
+
+    pub(crate) async fn lock_wg_key(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.wg_key_lock.lock().await
+    }
+
+    pub(crate) fn now_unix_secs(&self) -> u64 {
+        self.clock.now_unix_secs()
+    }
+
+    pub(crate) fn generate_wg_keypair(&self) -> WgKeyPair {
+        self.key_generator.generate()
+    }
+
+    pub(crate) async fn load_cached_wg_key(&self) -> Option<PersistedWgKey> {
+        if let Some(ref store) = self.wg_key_store {
+            let loaded = store.load();
+            *self.wg_key_cache.write().await = loaded.clone();
+            return loaded;
+        }
+        self.wg_key_cache.read().await.clone()
+    }
+
+    pub(crate) async fn save_cached_wg_key(&self, key: &PersistedWgKey) {
+        *self.wg_key_cache.write().await = Some(key.clone());
+        if let Some(ref store) = self.wg_key_store {
+            let _ = store.save(key);
+        }
+    }
+
+    pub(crate) async fn clear_cached_wg_key(&self) {
+        *self.wg_key_cache.write().await = None;
+        if let Some(ref store) = self.wg_key_store {
             store.clear();
         }
     }
@@ -341,6 +450,16 @@ impl HadalClient {
         .await
     }
 
+    pub(crate) async fn delete_raw(&self, path: &str, allow_refresh: bool) -> Result<(u16, Vec<u8>)> {
+        self.request(
+            reqwest::Method::DELETE,
+            path,
+            None,
+            allow_refresh && should_refresh_on_401(path),
+        )
+        .await
+    }
+
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let (status, bytes) = self
             .request(
@@ -440,6 +559,13 @@ impl KeyRegistrar for HadalClient {
     ) -> BoxFuture<'a, Result<RegisterPublicKeyResponse>> {
         Box::pin(async move { HadalClient::register_public_key(self, pub_key).await })
     }
+
+    fn ensure_wireguard_key<'a>(
+        &'a self,
+        _keys: &'a dyn KeyPairGenerator,
+    ) -> BoxFuture<'a, Result<PersistedWgKey>> {
+        Box::pin(async move { HadalClient::ensure_wireguard_key(self).await })
+    }
 }
 
 impl HadalApi for HadalClient {
@@ -461,6 +587,13 @@ impl HadalApi for HadalClient {
 
     fn get_user_location(&self) -> BoxFuture<'_, Result<UserLocation>> {
         Box::pin(async move { HadalClient::get_user_location(self).await })
+    }
+
+    fn rotate_wireguard_key<'a>(
+        &'a self,
+        _keys: &'a dyn KeyPairGenerator,
+    ) -> BoxFuture<'a, Result<PersistedWgKey>> {
+        Box::pin(async move { HadalClient::rotate_wireguard_key(self).await })
     }
 }
 

@@ -368,17 +368,15 @@ pub async fn verify_top_candidates_with(
         return;
     };
 
-    let keypair = keys.generate();
-    let Ok(reg) = registrar.register_public_key(&keypair.public_key).await else {
+    let Ok(wg_key) = registrar.ensure_wireguard_key(keys).await else {
         return;
     };
-    let address = reg.wireguard_address();
 
     if !run_verify_pass(
         daemon,
         &target_ip,
-        &keypair.private_key,
-        &address,
+        &wg_key.private_key,
+        &wg_key.address,
         targets,
         4,
         report,
@@ -401,8 +399,8 @@ pub async fn verify_top_candidates_with(
         let _ = run_verify_pass(
             daemon,
             &target_ip,
-            &keypair.private_key,
-            &address,
+            &wg_key.private_key,
+            &wg_key.address,
             finalist_targets,
             8,
             report,

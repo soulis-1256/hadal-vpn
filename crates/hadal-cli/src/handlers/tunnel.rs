@@ -155,8 +155,7 @@ pub async fn handle_connect(
         Vec::new()
     };
 
-    let keys = ctx.keys.generate();
-    let reg = ctx.api.register_public_key(&keys.public_key).await?;
+    let wg_key = ctx.api.ensure_wireguard_key(ctx.keys.as_ref()).await?;
     let split_cgroup_paths = ctx
         .split
         .active_slice_cgroup_paths(settings.split_tunnel.mode);
@@ -165,8 +164,8 @@ pub async fn handle_connect(
         cluster: &target,
         endpoint_ip: ep_ip.clone(),
         endpoint_port: ep_port,
-        priv_key: keys.private_key,
-        address: reg.wireguard_address(),
+        priv_key: wg_key.private_key,
+        address: wg_key.address,
         mtu: effective_mtu,
         killswitch: !no_killswitch && settings.killswitch,
         ipv6_block: !no_ipv6_block && settings.ipv6_block,

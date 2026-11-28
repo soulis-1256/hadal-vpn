@@ -9,9 +9,11 @@ use hadal_core::auth::AuthResponse;
 use hadal_core::{
     daemon_socket_path, endpoint_for_domain, jwt_is_expired_at, load_settings_from,
     save_settings_to, split_host_port_u16, AppSettings, BoxFuture, Clock, DaemonClient,
-    DaemonRequest, DaemonResponse, DaemonStatus, FileSessionStore, FileSettingsStore, HttpRequest,
-    HttpResponse, HttpTransport, Result, Session, SessionStore, SettingsStore,
-    HadalClient, HadalError, Sleeper, SplitMode, SplitTunnelConfig, TunnelState,
+    DaemonRequest, DaemonResponse, DaemonStatus, FileSessionStore, FileSettingsStore,
+    FileWgKeyStore, HadalClient, HadalError, HttpRequest, HttpResponse, HttpTransport,
+    KeyPairGenerator, PersistedWgKey, Result, Session, SessionStore, SettingsStore, Sleeper,
+    SplitMode, SplitTunnelConfig, TunnelState, WgKeyPair, WgKeyStore, WG_KEY_RENEWAL_MARGIN_SECS,
+    WG_KEY_VALIDATE_INTERVAL_SECS,
 };
 
 struct TempDir(PathBuf);
@@ -538,4 +540,237 @@ fn endpoint_and_socket_path_parsing_handles_ipv6_ports_and_empty() {
     );
     assert_eq!(split_host_port_u16("[::1]:51900"), ("[::1]".into(), 51900));
     assert!(!daemon_socket_path().as_os_str().is_empty());
+}
+
+struct SequenceKeyGen {
+    seq: Mutex<VecDeque<WgKeyPair>>,
+}
+
+impl SequenceKeyGen {
+    fn new(pairs: Vec<(&str, &str)>) -> Self {
+        Self {
+            seq: Mutex::new(
+                pairs
+                    .into_iter()
+                    .map(|(priv_k, pub_k)| WgKeyPair {
+                        private_key: priv_k.into(),
+                        public_key: pub_k.into(),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl KeyPairGenerator for SequenceKeyGen {
+    fn generate(&self) -> WgKeyPair {
+        self.seq
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("exhausted test keypairs")
+    }
+}
+
+#[tokio::test]
+async fn ensure_wireguard_key_persists_reuses_validates_rotates_and_cleans_up_on_logout() {
+    let dir = TempDir::new("wg-key-lifecycle");
+    let now_start: u64 = 1_795_888_656; // 2026-11-28T17:57:36Z
+    let clock = Arc::new(FixedClock::new(now_start));
+    let validate_mode = Arc::new(Mutex::new("ok")); // "ok" | "404" | "500"
+    let validate_mode_cb = validate_mode.clone();
+    let reg_counter = Arc::new(AtomicUsize::new(0));
+    let reg_counter_cb = reg_counter.clone();
+
+    let transport = Arc::new(MockTransport::new(move |req| {
+        if req.method == reqwest::Method::POST && req.url.ends_with("/v1/account/users/public-keys") {
+            let n = reg_counter_cb.fetch_add(1, Ordering::SeqCst) + 1;
+            let body_json: serde_json::Value =
+                serde_json::from_slice(req.body.as_deref().unwrap_or(b"{}")).unwrap();
+            let pub_key = body_json["pubKey"].as_str().unwrap_or("");
+            let expires = if n == 1 {
+                "2026-12-05T17:57:36+00:00"
+            } else {
+                "2026-12-12T17:57:36+00:00"
+            };
+            let resp = serde_json::json!({
+                "id": format!("hadal-key-{n}"),
+                "pubKey": pub_key,
+                "expiresAt": expires,
+            });
+            return Ok(HttpResponse {
+                status: 201,
+                body: serde_json::to_vec(&resp).unwrap(),
+            });
+        }
+        if req.method == reqwest::Method::POST
+            && req.url.ends_with("/v1/account/users/public-keys/validate")
+        {
+            let mode = *validate_mode_cb.lock().unwrap();
+            return match mode {
+                "404" => Ok(HttpResponse {
+                    status: 404,
+                    body: b"[]".to_vec(),
+                }),
+                "500" => Ok(HttpResponse {
+                    status: 500,
+                    body: b"transient error".to_vec(),
+                }),
+                _ => {
+                    let body_json: serde_json::Value =
+                        serde_json::from_slice(req.body.as_deref().unwrap_or(b"{}")).unwrap();
+                    let pub_key = body_json["pubKey"].as_str().unwrap_or("");
+                    let resp = serde_json::json!({
+                        "id": "hadal-key-1",
+                        "pubKey": pub_key,
+                        "expiresAt": "2026-12-05T17:57:36+00:00",
+                    });
+                    Ok(HttpResponse {
+                        status: 200,
+                        body: serde_json::to_vec(&resp).unwrap(),
+                    })
+                }
+            };
+        }
+        if req.method == reqwest::Method::DELETE
+            && req.url.contains("/v1/account/users/public-keys/")
+        {
+            return Ok(HttpResponse {
+                status: 200,
+                body: b"[]".to_vec(),
+            });
+        }
+        Ok(HttpResponse {
+            status: 404,
+            body: b"{}".to_vec(),
+        })
+    }));
+
+    let keygen = Arc::new(SequenceKeyGen::new(vec![
+        ("priv-1", "pub-1"),
+        ("priv-2", "pub-2"),
+        ("priv-3", "pub-3"),
+    ]));
+
+    let client = HadalClient::from_session(Session {
+        token: Some("valid-jwt".into()),
+        renew_token: Some("renew-jwt".into()),
+        token_expires_at: None,
+    })
+    .with_config_dir(dir.path().to_path_buf())
+    .with_transport(transport.clone())
+    .with_clock(clock.clone())
+    .with_key_generator(keygen.clone());
+
+    // 1. First call generates and registers key #1, persisting wg_key.json
+    let k1 = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k1.private_key, "priv-1");
+    assert_eq!(k1.public_key, "pub-1");
+    assert_eq!(k1.key_id.as_deref(), Some("hadal-key-1"));
+    assert_eq!(transport.recorded().len(), 1);
+    assert_eq!(
+        FileWgKeyStore::new(dir.path()).load().as_ref(),
+        Some(&k1)
+    );
+
+    // 2. Immediate second call (e.g. gaming scan -> connect) makes ZERO HTTP requests
+    let k1_again = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k1_again, k1);
+    assert_eq!(transport.recorded().len(), 1);
+
+    // 3. Separate client pointing at same config dir (CLI + GUI sharing state) reuses key with ZERO HTTP calls
+    let second_client = HadalClient::from_session(Session {
+        token: Some("valid-jwt".into()),
+        renew_token: None,
+        token_expires_at: None,
+    })
+    .with_config_dir(dir.path().to_path_buf())
+    .with_transport(transport.clone())
+    .with_clock(clock.clone())
+    .with_key_generator(keygen.clone());
+    assert_eq!(second_client.ensure_wireguard_key().await.unwrap(), k1);
+    assert_eq!(transport.recorded().len(), 1);
+
+    // 4. After > 1 hour, runs read-only /validate and keeps key #1 without re-registering
+    clock.set(now_start + WG_KEY_VALIDATE_INTERVAL_SECS + 10);
+    let k1_validated = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k1_validated.public_key, "pub-1");
+    assert_eq!(reg_counter.load(Ordering::SeqCst), 1);
+    assert!(transport
+        .recorded()
+        .last()
+        .unwrap()
+        .url
+        .ends_with("/public-keys/validate"));
+
+    // 5. Transient 500 from /validate keeps reusing locally valid key #1
+    *validate_mode.lock().unwrap() = "500";
+    clock.set(now_start + 2 * WG_KEY_VALIDATE_INTERVAL_SECS + 20);
+    let k1_fallback = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k1_fallback.public_key, "pub-1");
+    assert_eq!(reg_counter.load(Ordering::SeqCst), 1);
+
+    // 6. Server 404 from /validate (early revocation) self-heals by registering key #2
+    *validate_mode.lock().unwrap() = "404";
+    clock.set(now_start + 3 * WG_KEY_VALIDATE_INTERVAL_SECS + 30);
+    let k2 = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k2.private_key, "priv-2");
+    assert_eq!(k2.public_key, "pub-2");
+    assert_eq!(k2.key_id.as_deref(), Some("hadal-key-2"));
+    assert_eq!(reg_counter.load(Ordering::SeqCst), 2);
+
+    // 7. Near expiry (< 12h remaining before 2026-12-12T17:57:36Z) deletes key #2 and rotates to key #3
+    let k2_exp = k2.effective_expires_at_epoch().unwrap();
+    clock.set(k2_exp - WG_KEY_RENEWAL_MARGIN_SECS + 60);
+    let k3 = client.ensure_wireguard_key().await.unwrap();
+    assert_eq!(k3.private_key, "priv-3");
+    assert_eq!(k3.key_id.as_deref(), Some("hadal-key-3"));
+    assert!(transport.recorded().iter().any(|r| {
+        r.method == reqwest::Method::DELETE
+            && r.url.ends_with("/v1/account/users/public-keys/hadal-key-2")
+    }));
+
+    // 8. Logout deletes Hadal's own key #3 and removes both wg_key.json and session.json
+    client.logout().await;
+    assert!(PersistedWgKey::load_from(dir.path()).is_none());
+    assert!(Session::load_from(dir.path()).is_none());
+    assert!(transport.recorded().iter().any(|r| {
+        r.method == reqwest::Method::DELETE
+            && r.url.ends_with("/v1/account/users/public-keys/hadal-key-3")
+    }));
+}
+
+#[tokio::test]
+async fn register_public_key_handles_409_conflict_via_validate() {
+    let dir = TempDir::new("wg-key-409");
+    let transport = Arc::new(MockTransport::new(move |req| {
+        if req.url.ends_with("/v1/account/users/public-keys") {
+            return Ok(HttpResponse {
+                status: 409,
+                body: b"{\"message\":\"Conflict\"}".to_vec(),
+            });
+        }
+        if req.url.ends_with("/v1/account/users/public-keys/validate") {
+            return Ok(HttpResponse {
+                status: 200,
+                body: br#"{"id":"existing-409-id","pubKey":"pub-dup","expiresAt":"2026-12-05T17:57:36+00:00"}"#.to_vec(),
+            });
+        }
+        Ok(HttpResponse {
+            status: 404,
+            body: b"{}".to_vec(),
+        })
+    }));
+
+    let client = HadalClient::from_session(Session {
+        token: Some("valid-jwt".into()),
+        renew_token: None,
+        token_expires_at: None,
+    })
+    .with_config_dir(dir.path().to_path_buf())
+    .with_transport(transport);
+
+    let resp = client.register_public_key("pub-dup").await.unwrap();
+    assert_eq!(resp.key_id(), Some("existing-409-id"));
+    assert_eq!(resp.expires_at(), Some("2026-12-05T17:57:36+00:00"));
 }

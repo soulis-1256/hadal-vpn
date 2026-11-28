@@ -5,10 +5,11 @@ use base64::Engine;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use hadal_core::{
-    normalize_wg_address, send_request_on_stream, ConnectSpec, DaemonClient, DaemonRequest,
-    DaemonResponse, DaemonStatus, EndpointProbeResult, PingStats, RegisterPublicKeyResponse,
-    SplitMode, SplitTunnelConfig, TunnelState, UnixDaemonClient, VerifiedTunnelResult,
-    VerifyTarget, WanGamingProbe, WgKeyPair,
+    normalize_wg_address, parse_rfc3339_utc_secs, send_request_on_stream, ConnectSpec,
+    DaemonClient, DaemonRequest, DaemonResponse, DaemonStatus, EndpointProbeResult, PersistedWgKey,
+    PingStats, RegisterPublicKeyResponse, SplitMode, SplitTunnelConfig, TunnelState,
+    UnixDaemonClient, VerifiedTunnelResult, VerifyTarget, WanGamingProbe, WgKeyPair,
+    WG_KEY_RENEWAL_MARGIN_SECS, WG_KEY_VALIDATE_INTERVAL_SECS,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -80,6 +81,84 @@ fn normalize_wg_address_and_register_response_fallbacks() {
         extra: serde_json::json!({}),
     };
     assert_eq!(default_fallback.wireguard_address(), "10.14.0.2/32");
+    assert_eq!(default_fallback.key_id(), None);
+    assert_eq!(default_fallback.expires_at(), None);
+
+    let with_meta = RegisterPublicKeyResponse {
+        ip: None,
+        extra: serde_json::json!({
+            "id": "01a2234e-30c9-7e6a-9664-29d720e720e6",
+            "expiresAt": "2026-12-05T17:57:36+00:00",
+        }),
+    };
+    assert_eq!(
+        with_meta.key_id(),
+        Some("01a2234e-30c9-7e6a-9664-29d720e720e6")
+    );
+    assert_eq!(with_meta.expires_at(), Some("2026-12-05T17:57:36+00:00"));
+}
+
+#[test]
+fn rfc3339_timestamp_parsing_and_persisted_wg_key_validity() {
+    assert_eq!(parse_rfc3339_utc_secs("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(
+        parse_rfc3339_utc_secs("2026-12-05T17:57:36+00:00"),
+        Some(1_796_493_456)
+    );
+    assert_eq!(
+        parse_rfc3339_utc_secs("2026-12-05T19:57:36+02:00"),
+        Some(1_796_493_456)
+    );
+    assert_eq!(
+        parse_rfc3339_utc_secs("2026-12-05T12:57:36.987654-05:00"),
+        Some(1_796_493_456)
+    );
+    assert!(parse_rfc3339_utc_secs("2024-02-29T00:00:00Z").is_some());
+    assert!(parse_rfc3339_utc_secs("2000-02-29T00:00:00Z").is_some());
+    assert_eq!(parse_rfc3339_utc_secs("2025-02-29T00:00:00Z"), None);
+    assert_eq!(parse_rfc3339_utc_secs("2100-02-29T00:00:00Z"), None);
+    assert_eq!(parse_rfc3339_utc_secs("not-a-timestamp"), None);
+
+    let now = 1_795_888_656; // 2026-11-28T17:57:36Z (7 days before 2026-12-05)
+    let pair = WgKeyPair {
+        private_key: "priv-a".into(),
+        public_key: "pub-a".into(),
+    };
+    let resp = RegisterPublicKeyResponse {
+        ip: Some("10.14.0.2".into()),
+        extra: serde_json::json!({
+            "id": "key-id-1",
+            "expiresAt": "2026-12-05T17:57:36+00:00"
+        }),
+    };
+    let persisted = PersistedWgKey::from_registration(pair, &resp, Some(now));
+    assert!(persisted.is_valid_at(now));
+    assert!(!persisted.needs_validation_at(now));
+    assert!(persisted.needs_validation_at(now + WG_KEY_VALIDATE_INTERVAL_SECS));
+    assert!(!persisted.is_valid_at(1_796_493_456 - WG_KEY_RENEWAL_MARGIN_SECS));
+    assert!(persisted.is_valid_at(1_796_493_456 - WG_KEY_RENEWAL_MARGIN_SECS - 1));
+
+    // File persistence roundtrip with 0600 permissions
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("hadal-wg-key-test-{nanos}-{}", std::process::id()));
+    persisted.save_to(&dir).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join("wg_key.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    assert_eq!(PersistedWgKey::load_from(&dir), Some(persisted));
+    PersistedWgKey::clear_files_in(&dir);
+    assert_eq!(PersistedWgKey::load_from(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

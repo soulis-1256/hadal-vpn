@@ -63,8 +63,7 @@ pub async fn handle_gaming(
             .find(|c| c.id == best.cluster_id)
             .ok_or_else(|| HadalError::Custom("Best cluster vanished".into()))?;
         let settings = ctx.settings.load();
-        let keys = ctx.keys.generate();
-        let reg = ctx.api.register_public_key(&keys.public_key).await?;
+        let wg_key = ctx.api.ensure_wireguard_key(ctx.keys.as_ref()).await?;
         let game_cidrs = if game_only {
             report.game_cidrs.clone()
         } else {
@@ -78,8 +77,8 @@ pub async fn handle_gaming(
             cluster: &cluster,
             endpoint_ip: best.endpoint_ip.clone(),
             endpoint_port: DEFAULT_WG_PORT,
-            priv_key: keys.private_key,
-            address: reg.wireguard_address(),
+            priv_key: wg_key.private_key,
+            address: wg_key.address,
             mtu: report.recommended_mtu,
             killswitch: settings.killswitch,
             ipv6_block: settings.ipv6_block,

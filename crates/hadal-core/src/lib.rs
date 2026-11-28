@@ -54,6 +54,8 @@ pub use split_tunnel::{
     XdgAppCatalog, BYPASS_SLICE, DEFAULT_SLICE, VPN_SLICE,
 };
 pub use wireguard::{
-    normalize_wg_address, KeyPairGenerator, OsKeyPairGenerator, RegisterPublicKeyResponse,
-    WgKeyPair,
+    normalize_wg_address, parse_rfc3339_utc_secs, FileWgKeyStore, KeyPairGenerator,
+    OsKeyPairGenerator, PersistedWgKey, RegisterPublicKeyResponse, WgKeyPair, WgKeyStore,
+    WG_KEY_FALLBACK_TTL_SECS, WG_KEY_FILENAME, WG_KEY_RENEWAL_MARGIN_SECS,
+    WG_KEY_VALIDATE_INTERVAL_SECS,
 };

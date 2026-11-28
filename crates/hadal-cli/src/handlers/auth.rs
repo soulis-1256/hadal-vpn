@@ -68,10 +68,12 @@ pub async fn handle_servers(
 }
 
 pub async fn handle_keygen(ctx: &CliContext) -> Result<()> {
-    let keys = ctx.keys.generate();
-    ctx.println(format!("PublicKey:  {}", keys.public_key))?;
-    ctx.println(format!("PrivateKey: {}", keys.private_key))?;
-    let res = ctx.api.register_public_key(&keys.public_key).await?;
-    ctx.println(format!("Registered Address: {}", res.wireguard_address()))?;
+    let wg_key = ctx.api.rotate_wireguard_key(ctx.keys.as_ref()).await?;
+    ctx.println(format!("PublicKey:  {}", wg_key.public_key))?;
+    ctx.println(format!("PrivateKey: {}", wg_key.private_key))?;
+    ctx.println(format!("Registered Address: {}", wg_key.address))?;
+    if let Some(exp) = wg_key.expires_at {
+        ctx.println(format!("ExpiresAt:  {exp}"))?;
+    }
     Ok(())
 }

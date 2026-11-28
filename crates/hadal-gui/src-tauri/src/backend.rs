@@ -9,7 +9,8 @@ use hadal_core::{
     launch_app_in_slice, load_settings, prepare_connect_target, query_daemon_status,
     reconcile_split_slices, save_settings, scan_gaming_with_daemon, send_request, AppSettings,
     Cluster, DaemonRequest, DaemonResponse, DaemonStatus, DesktopAppEntry, GamingScanReport,
-    RegisterPublicKeyResponse, HadalClient, HadalError, SplitAppStatus, SplitMode, UserLocation,
+    HadalClient, HadalError, PersistedWgKey, RegisterPublicKeyResponse, SplitAppStatus, SplitMode,
+    UserLocation, WgKeyPair,
 };
 
 use crate::state::DaemonEnvelope;
@@ -78,6 +79,13 @@ pub trait AccountApi: Send + Sync {
         &'a self,
         pub_key: &'a str,
     ) -> BoxFuture<'a, Result<RegisterPublicKeyResponse, String>>;
+    fn ensure_wireguard_key(&self) -> BoxFuture<'_, Result<PersistedWgKey, String>> {
+        Box::pin(async move {
+            let pair = WgKeyPair::generate();
+            let reg = self.register_public_key(&pair.public_key).await?;
+            Ok(PersistedWgKey::from_registration(pair, &reg, None))
+        })
+    }
 }
 
 pub struct HadalAccountApi {
@@ -125,7 +133,7 @@ impl AccountApi for HadalAccountApi {
 
     fn clear_session(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {
-            self.client.clear_session().await;
+            self.client.logout().await;
         })
     }
 
@@ -149,6 +157,15 @@ impl AccountApi for HadalAccountApi {
         Box::pin(async move {
             self.client
                 .register_public_key(pub_key)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn ensure_wireguard_key(&self) -> BoxFuture<'_, Result<PersistedWgKey, String>> {
+        Box::pin(async move {
+            self.client
+                .ensure_wireguard_key()
                 .await
                 .map_err(|e| e.to_string())
         })

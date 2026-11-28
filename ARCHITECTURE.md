@@ -52,7 +52,7 @@ crates/
 
 ### Surfshark Client Engine (`hadal-core`)
 * Sends honest client identification (`User-Agent: hadal-vpn/<version>`) and standard device headers (`x-device-id`, `x-device-type: desktop`, `x-device-platform: linux`, `x-device-version`).
-* Handles 6-char Quick Pair authorization (`/v1/account/authorization/create` + `/v1/auth/remote`), proactive/401 JWT refresh (`POST /v1/auth/renew`), `/v5/server/clusters/all`, and ephemeral WireGuard keypair registration (`/v1/account/users/public-keys`) without touching user passwords.
+* Handles 6-char Quick Pair authorization (`/v1/account/authorization/create` + `/v1/auth/remote`), proactive/401 JWT refresh (`POST /v1/auth/renew`), `/v5/server/clusters/all`, and persistent single-keypair WireGuard registration (`~/.config/hadal-vpn/wg_key.json` via `/v1/account/users/public-keys`, hourly `/validate` self-healing, expiry rotation, and `DELETE` cleanup on rotation/logout) without touching user passwords or other account keys.
 
 ---
 
